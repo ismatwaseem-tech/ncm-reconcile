@@ -248,7 +248,7 @@
           const gRes = await fetch(CONFIG.geojsonUrl); if (!gRes.ok) throw new Error("GeoJSON " + gRes.status);
           const gJson = await gRes.json();
           const gAlerts = fromGeojson(gJson);
-          const mJson = { alerts: gAlerts.map(function(g) { return { id: g.id, alertTypeEn: g.level, alertStatusEn: g.status, fromDate: g.fromDate, toDate: g.toDate, regionEn: g.region, regionAR: g.regionAr, governorates: (g.governorates||[]).map(function(n){return{nameEn:n};}), alertHazards: (g.hazards||[]).map(function(h){return{descriptionEn:h};}) }; }) };
+          const mJson = { alerts: gAlerts.map(function(g) { return { id: g.id, title: g.title, regionEn: g.region, regionAR: g.regionAr, governorates: (g.governorates||[]).map(function(n){return{nameEn:n,nameAr:""};}), alert_type: { color: g.color, en: g.level }, alert_status: { en: g.status }, alert_hazard: (g.hazards||[]).map(function(h){return{name_en:h};}), fromDate: g.fromDate, toDate: g.toDate, rawData: { alertStatusCategory: g.category, lastModified: g.lastModified } }; }) };
           setRawA(gJson); setRawB(mJson); setMode("live"); setLastRefreshed(new Date());
         } catch (e) {
           setError("Live fetch unavailable (" + e.message + "). Showing sample data.");
