@@ -213,3 +213,120 @@
       );
     }
     const todayStr = (o = 0) => { const d = new Date(); d.setDate(d.getDate() + o); return d.toISOString().slice(0, 10); };
+    function App() {
+      const [rawA, setRawA] = useState(DEMO_GEOJSON);
+      const [rawB, setRawB] = useState(DEMO_MANNED);
+      const [mode, setMode] = useState("demo");
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState("");
+      const [lastRefreshed, setLastRefreshed] = useState(new Date());
+      const [filter, setFilter] = useState("all");
+      const [regionFilter, setRegionFilter] = useState("all");
+      const [query, setQuery] = useState("");
+      const [expanded, setExpanded] = useState(null);
+      const [showSettings, setShowSettings] = useState(false);
+      const [proxyBase, setProxyBase] = useState(CONFIG.defaultProxyBase);
+      const [autoRefresh, setAutoRefresh] = useState(false);
+      const [intervalMin, setIntervalMin] = useState(10);
+      const [fromDate, setFromDate] = useState(todayStr(0));
+      const [toDate, setToDate] = useState(todayStr(2));
+      const listA = useMemo(() => fromGeojson(rawA), [rawA]);
+      const listB = useMemo(() => fromManned(rawB), [rawB]);
+      const reconciled = useMemo(() => reconcile(listA, listB), [listA, listB]);
+      const summary = useMemo(() => { const s = { total: reconciled.length, match: 0, mismatch: 0, missing: 0 }; reconciled.forEach((r) => { if (r.state === "match") s.match++; else if (r.state === "mismatch") s.mismatch++; else s.missing++; }); return s; }, [reconciled]);
+      const regions = useMemo(() => ["all", ...new Set(reconciled.map((r) => (r.a || r.b).region).filter(Boolean))], [reconciled]);
+      const visible = useMemo(() => reconciled.filter((r) => {
+        if (filter === "issues" && r.state === "match") return false;
+        const ref = r.a || r.b;
+        if (regionFilter !== "all" && ref.region !== regionFilter) return false;
+        if (query && (r.id + " " + ref.region + " " + ref.status + " " + ref.governorates.join(" ")).toLowerCase().includes(query.toLowerCase())) return false;
+        return true;
+      }), [reconciled, filter, regionFilter, query]);
+      const loadData = useCallback(async () => {
+        setLoading(true); setError("");
+        try {
+          const gUrl = proxyBase ? proxyBase + "/ncm-geojson" : CONFIG.geojsonUrl;
+          const mUrl = proxyBase ? proxyBase + "/ncm-manned" : CONFIG.mannedUrl;
+          const gRes = await fetch(gUrl); if (!gRes.ok) throw new Error("GeoJSON " + gRes.status);
+          const gJson = await gRes.json();
+          const mRes = await fetch(mUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from_date: fromDate, to_date: toDate, lang: "en" }) });
+          if (!mRes.ok) throw new Error("manned-alerts " + mRes.status);
+          const mJson = await mRes.json();
+          setRawA(gJson); setRawB(mJson); setMode("live"); setLastRefreshed(new Date());
+        } catch (e) {
+          setError("Live fetch unavailable (" + e.message + "). Showing sample data.");
+          setRawA(DEMO_GEOJSON); setRawB(DEMO_MANNED); setMode("demo"); setLastRefreshed(new Date());
+        } finally { setLoading(false); }
+      }, [proxyBase, fromDate, toDate]);
+      useEffect(() => { loadData(); }, []);
+      useEffect(() => { if (!autoRefresh) return; const id = setInterval(loadData, intervalMin * 60000); return () => clearInterval(id); }, [autoRefresh, intervalMin, loadData]);
+      return (
+        <div className="max-w-5xl mx-auto text-slate-900">
+          <div className="rounded-2xl px-5 py-4 flex items-center gap-3 mb-4" style={{ backgroundColor: BRAND.navy }}>
+            <img src="https://www.centricdxb.com/assets/images/centric_logo_white_text.svg" alt="Centric" className="h-7 w-auto shrink-0" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+            <div className="w-px h-8 bg-white/15 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <h1 className="text-white font-semibold text-base sm:text-lg leading-tight">NCM Early-Warning Reconciliation</h1>
+              <p className="text-slate-400 text-xs hidden sm:block">Map GeoJSON vs Early-Warning · field-by-field</p>
+            </div>
+            <div className={"flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full " + (mode === "live" ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300")}>
+              <span className={"w-1.5 h-1.5 rounded-full " + (mode === "live" ? "bg-emerald-400" : "bg-amber-400")} />{mode === "live" ? "Live" : "Sample data"}
+            </div>
+            <button onClick={() => setShowSettings((s) => !s)} className="text-slate-400 hover:text-white transition p-1.5"><IcGear c="w-5 h-5" /></button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <button onClick={loadData} disabled={loading} style={{ backgroundColor: BRAND.teal }} className="flex items-center gap-2 hover:opacity-90 disabled:opacity-60 text-white text-sm font-medium px-4 py-2 rounded-lg transition">
+              <IcRefresh c={"w-4 h-4 " + (loading ? "animate-spin" : "")} /> Compare now
+            </button>
+            <div className="flex items-center gap-2 text-xs text-slate-500"><IcClock c="w-3.5 h-3.5" /> Updated {lastRefreshed.toLocaleTimeString()}</div>
+            <div className="flex-1" />
+            <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} style={{ accentColor: BRAND.teal }} className="w-4 h-4" />Auto-refresh
+              <select value={intervalMin} onChange={(e) => setIntervalMin(Number(e.target.value))} disabled={!autoRefresh} className="border border-slate-300 rounded-md px-1.5 py-1 text-xs bg-white disabled:opacity-50">
+                <option value={5}>5 min</option><option value={10}>10 min</option><option value={15}>15 min</option><option value={30}>30 min</option>
+              </select>
+            </label>
+          </div>
+          {showSettings && (
+            <div className="bg-white border border-slate-200 rounded-xl p-4 mb-4 text-sm space-y-3">
+              <div className="flex items-center gap-2 text-slate-700 font-medium"><IcGear c="w-4 h-4" /> Data source</div>
+              <div><label className="text-xs text-slate-500 block mb-1">Proxy base (blank = attempt direct fetch)</label>
+                <input value={proxyBase} onChange={(e) => setProxyBase(e.target.value)} placeholder="/.netlify/functions" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono" /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs text-slate-500 block mb-1">From date</label><input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></div>
+                <div><label className="text-xs text-slate-500 block mb-1">To date</label><input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></div>
+              </div>
+            </div>
+          )}
+          {error && <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3 mb-4 flex items-start gap-2"><IcWarn c="w-4 h-4 mt-0.5 shrink-0" /> {error}</div>}
+          <div className="flex flex-wrap gap-3 mb-4">
+            <StatCard label="Distinct alerts" value={summary.total} accent="text-slate-900" />
+            <StatCard label="Matching" value={summary.match} accent="text-emerald-600" />
+            <StatCard label="Field mismatches" value={summary.mismatch} accent="text-amber-600" />
+            <StatCard label="Missing on one side" value={summary.missing} accent="text-rose-600" />
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <div className="flex bg-white border border-slate-200 rounded-lg p-0.5">
+              <button onClick={() => setFilter("all")} className="text-xs px-3 py-1.5 rounded-md font-medium" style={filter === "all" ? { backgroundColor: BRAND.navy, color: "#fff" } : { color: "#475569" }}>All</button>
+              <button onClick={() => setFilter("issues")} className="text-xs px-3 py-1.5 rounded-md font-medium" style={filter === "issues" ? { backgroundColor: BRAND.navy, color: "#fff" } : { color: "#475569" }}>Issues only</button>
+            </div>
+            <select value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2.5 py-2 bg-white">
+              {regions.map((r) => <option key={r} value={r}>{r === "all" ? "All regions" : r}</option>)}
+            </select>
+            <div className="relative flex-1 min-w-[160px]">
+              <span className="absolute left-2.5 top-2.5 text-slate-400"><IcSearch c="w-3.5 h-3.5" /></span>
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search id, region, status..." className="w-full border border-slate-200 rounded-lg pl-8 pr-3 py-2 text-xs bg-white" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            {visible.length === 0 && <div className="text-center text-sm text-slate-400 py-10 bg-white rounded-xl border border-slate-200">No alerts match this filter.</div>}
+            {visible.map((row) => <AlertRow key={row.id} row={row} expanded={expanded === row.id} onToggle={() => setExpanded(expanded === row.id ? null : row.id)} />)}
+          </div>
+          <div className="mt-5 flex items-center gap-2 text-xs text-slate-400"><IcShield c="w-3.5 h-3.5" /> Read-only, reconciled by alert ID.</div>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
