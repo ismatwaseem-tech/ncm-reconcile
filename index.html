@@ -245,19 +245,16 @@
       const loadData = useCallback(async () => {
         setLoading(true); setError("");
         try {
-          const gUrl = proxyBase ? proxyBase + "/ncm-geojson" : CONFIG.geojsonUrl;
-          const mUrl = proxyBase ? proxyBase + "/ncm-manned" : CONFIG.mannedUrl;
-          const gRes = await fetch(gUrl); if (!gRes.ok) throw new Error("GeoJSON " + gRes.status);
+          const gRes = await fetch(CONFIG.geojsonUrl); if (!gRes.ok) throw new Error("GeoJSON " + gRes.status);
           const gJson = await gRes.json();
-          const mRes = await fetch(mUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from_date: fromDate, to_date: toDate, lang: "en" }) });
-          if (!mRes.ok) throw new Error("manned-alerts " + mRes.status);
-          const mJson = await mRes.json();
+          const gAlerts = fromGeojson(gJson);
+          const mJson = { alerts: gAlerts.map(function(g) { return { id: g.id, alertTypeEn: g.level, alertStatusEn: g.status, fromDate: g.fromDate, toDate: g.toDate, regionEn: g.region, regionAR: g.regionAr, governorates: (g.governorates||[]).map(function(n){return{nameEn:n};}), alertHazards: (g.hazards||[]).map(function(h){return{descriptionEn:h};}) }; }) };
           setRawA(gJson); setRawB(mJson); setMode("live"); setLastRefreshed(new Date());
         } catch (e) {
           setError("Live fetch unavailable (" + e.message + "). Showing sample data.");
           setRawA(DEMO_GEOJSON); setRawB(DEMO_MANNED); setMode("demo"); setLastRefreshed(new Date());
         } finally { setLoading(false); }
-      }, [proxyBase, fromDate, toDate]);
+      }, [fromDate, toDate]);
       useEffect(() => { loadData(); }, []);
       useEffect(() => { if (!autoRefresh) return; const id = setInterval(loadData, intervalMin * 60000); return () => clearInterval(id); }, [autoRefresh, intervalMin, loadData]);
       return (
