@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NCM Early-Warning Reconciliation · Centric</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style> body { font-family: Inter, system-ui, sans-serif; } </style>
+</head>
+<body class="bg-slate-100">
+  <div id="root" class="p-4 sm:p-6"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useMemo, useCallback } = React;
+
+    /* ===== CONFIG ===== */
+    const CONFIG = {
+      geojsonUrl: "https://meteo.ncm.gov.sa/public/ews/latest.geojson",
+      mannedUrl: "https://ncm.gov.sa/manned-alerts",
+      defaultProxyBase: "/.netlify/functions",
+    };
+
+    const BRAND = { teal: "#13B6BE", navy: "#0F172A" };
+    const COLOR_MAP = { "1": "red", "2": "yellow", "3": "orange" };
+
+    /* ===== icons (inline SVG) ===== */
+    const S = (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={p.c || "w-4 h-4"}>{p.children}</svg>;
+    const IcRefresh = (p) => <S c={p.c}><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></S>;
+    const IcWarn = (p) => <S c={p.c}><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4" /><path d="M12 17h.01" /></S>;
+    const IcCheck = (p) => <S c={p.c}><path d="M22 11.1V12a10 10 0 1 1-5.9-9.1" /><path d="m9 11 3 3L22 4" /></S>;
+    const IcX = (p) => <S c={p.c}><circle cx="12" cy="12" r="10" /><path d="m15 9-6 6M9 9l6 6" /></S>;
+    const IcGear = (p) => <S c={p.c}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 7 2.6h.1A1.6 1.6 0 0 0 8 1.1V1a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 17 2.6a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.1 1.5H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" /></S>;
+    const IcPin = (p) => <S c={p.c}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z" /><circle cx="12" cy="10" r="3" /></S>;
+    const IcClock = (p) => <S c={p.c}><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></S>;
+    const IcDown = (p) => <S c={p.c}><path d="m6 9 6 6 6-6" /></S>;
+    const IcRight = (p) => <S c={p.c}><path d="m9 18 6-6-6-6" /></S>;
+    const IcDb = (p) => <S c={p.c}><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14a9 3 0 0 0 18 0V5" /><path d="M3 12a9 3 0 0 0 18 0" /></S>;
+    const IcShield = (p) => <S c={p.c}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></S>;
+    const IcSearch = (p) => <S c={p.c}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></S>;
+
+    /* ===== helpers ===== */
+    const pad = (n) => String(n).padStart(2, "0");
+    function normDate(s) {
+      if (!s) return "";
+      const str = String(s).trim();
+      let m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})/);
+      if (m) return `${m[1]}-${m[2]}-${m[3]} ${pad(m[4])}:${m[5]}`;
+      m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T](\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i);
+      if (m) {
+        let h = parseInt(m[4], 10); const ap = (m[6] || "").toUpperCase();
+        if (ap === "PM" && h !== 12) h += 12; if (ap === "AM" && h === 12) h = 0;
+        return `${m[3]}-${pad(m[1])}-${pad(m[2])} ${pad(h)}:${m[5]}`;
+      }
+      return str;
+    }
+    const sortJoin = (a, sep = ", ") => [...a].filter(Boolean).sort((x, y) => x.localeCompare(y)).join(sep);
+    function fromManned(resp) {
+      const arr = resp?.data || resp?.alerts || (Array.isArray(resp) ? resp : []);
+      return arr.map((a) => ({
+        id: String(a.id), title: a.title || "",
+        region: a.region?.en || a.regionEn || "", regionAr: a.region?.ar || a.regionAR || "",
+        governorates: (a.governorates || []).map((g) => g.name_en || g.nameEn || ""),
+        governoratesAr: (a.governorates || []).map((g) => g.name_ar || g.nameAr || ""),
+        color: a.alert_type?.color || COLOR_MAP[String(a.rawData?.alertType)] || "",
+        level: a.alert_type?.en || a.rawData?.alertTypeEn || "",
+        status: a.alert_status?.en || a.rawData?.alertStatusEn || "",
+        hazards: (a.alert_hazard || []).map((h) => h.name_en || h.descriptionEn || ""),
+        fromDate: normDate(a.fromDate), toDate: normDate(a.toDate),
+        lastModified: normDate(a.lastModifiedDate || a.rawData?.lastModified),
+        category: a.rawData?.alertStatusCategory || "",
+      }));
+    }
+    function fromGeojson(fc) {
+      const seen = new Map();
+      (fc?.features || []).forEach((f) => (f.properties?.alert || []).forEach((a) => { const id = String(a.id); if (!seen.has(id)) seen.set(id, a); }));
+      return [...seen.values()].map((a) => ({
+        id: String(a.id), title: a.title || "",
+        region: a.regionEn || "", regionAr: a.regionAR || "",
+        governorates: (a.governorates || []).map((g) => g.nameEn || ""),
+        governoratesAr: (a.governorates || []).map((g) => g.nameAr || ""),
+        color: COLOR_MAP[String(a.alertType)] || "", level: a.alertTypeEn || "",
+        status: a.alertStatusEn || "", hazards: (a.alertHazards || []).map((h) => h.descriptionEn || ""),
+        fromDate: normDate(a.fromDate), toDate: normDate(a.toDate), lastModified: normDate(a.lastModified),
+        category: a.alertStatusCategory || "",
+      }));
+    }
+    const FIELDS = [
+      { key: "region", label: "Region", get: (x) => x.region },
+      { key: "governorates", label: "Governorates", get: (x) => sortJoin(x.governorates) },
+      { key: "color", label: "Severity", get: (x) => x.color },
+      { key: "level", label: "Alert level", get: (x) => x.level },
+      { key: "status", label: "Weather status", get: (x) => x.status },
+      { key: "hazards", label: "Hazards", get: (x) => sortJoin(x.hazards, "; ") },
+      { key: "fromDate", label: "From", get: (x) => x.fromDate },
+      { key: "toDate", label: "To", get: (x) => x.toDate },
+    ];
+    function reconcile(listA, listB) {
+      const map = new Map();
+      listA.forEach((a) => map.set(a.id, { id: a.id, a, b: null }));
+      listB.forEach((b) => { if (map.has(b.id)) map.get(b.id).b = b; else map.set(b.id, { id: b.id, a: null, b }); });
+      return [...map.values()].map((e) => {
+        if (e.a && !e.b) return { ...e, state: "missingB", diffs: [] };
+        if (e.b && !e.a) return { ...e, state: "missingA", diffs: [] };
+        const diffs = [];
+        FIELDS.forEach((f) => { if (f.get(e.a) !== f.get(e.b)) diffs.push({ key: f.key }); });
+        return { ...e, state: diffs.length ? "mismatch" : "match", diffs };
+      }).sort((x, y) => x.id.localeCompare(y.id));
+}
+
+    /* ===== demo fallback (real schema) ===== */
+    function toUS(iso) {
+      const m = iso.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?/); if (!m) return iso;
+      let h = parseInt(m[4], 10); const ap = h >= 12 ? "PM" : "AM"; let h12 = h % 12; if (h12 === 0) h12 = 12;
+      return `${parseInt(m[2])}/${parseInt(m[3])}/${m[1]} ${h12}:${m[5]}:${m[6] || "00"} ${ap}`;
+    }
+    const base = {
+      81200: { id: "81200", title: "21062026-07", regionId: 7, regionEn: "Eastern", regionAr: "المنطقة الشرقية", govs: [["Al Ahsa", "الأحساء"], ["Al Udayd", "العديد"], ["Buqayq", "بقيق"]], typeNum: 3, color: "orange", typeEn: "Advanced Watch", typeAr: "الإنذار البرتقالي", statusId: 12, statusEn: "Heat wave", statusAr: "موجة حارة", cat: "Hot", hazards: [["A rise in temperature from (49-50)°C", "إرتفاع في درجات الحرارة"]], from: "2026-06-22 11:00:00", to: "2026-06-22 17:00:00", lastMod: "2026-06-22 09:06:53" },
+      81230: { id: "81230", title: "21062026-37", regionId: 10, regionEn: "Bahah", regionAr: "منطقة الباحة", govs: [["Al Bahah", "الباحة"], ["Al Qara", "القرى"], ["Al Mikhwah", "المخواة"], ["Al Mandaq", "المندق"]], typeNum: 2, color: "yellow", typeEn: "Watch", typeAr: "الإنذار الأصفر", statusId: 23, statusEn: "Light rain", statusAr: "أمطار خفيفة", cat: "lightrrain", hazards: [["Active winds", "رياح نشطة"], ["Thunder Strikes", "صواعق رعدية"]], from: "2026-06-22 12:00:00", to: "2026-06-22 20:00:00", lastMod: "2026-06-22 15:26:17" },
+      81210: { id: "81210", title: "21062026-12", regionId: 2, regionEn: "Makkah", regionAr: "منطقة مكة المكرمة", govs: [["Jeddah", "جدة"], ["Taif", "الطائف"]], typeNum: 2, color: "yellow", typeEn: "Watch", typeAr: "الإنذار الأصفر", statusId: 1, statusEn: "Active winds", statusAr: "رياح نشطة", cat: "wind", hazards: [["Active surface winds", "رياح سطحية نشطة"]], from: "2026-06-22 14:00:00", to: "2026-06-22 20:00:00", lastMod: "2026-06-22 10:30:00" },
+      81215: { id: "81215", title: "21062026-18", regionId: 14, regionEn: "Asir", regionAr: "منطقة عسير", govs: [["Abha", "أبها"], ["Khamis Mushait", "خميس مشيط"], ["Bisha", "بيشة"]], typeNum: 3, color: "orange", typeEn: "Advanced Watch", typeAr: "الإنذار البرتقالي", statusId: 5, statusEn: "Moderate rains", statusAr: "أمطار متوسطة", cat: "rain", hazards: [["Flash floods in valleys", "جريان السيول"]], from: "2026-06-22 13:00:00", to: "2026-06-22 21:00:00", lastMod: "2026-06-22 09:55:00" },
+      81220: { id: "81220", title: "21062026-22", regionId: 3, regionEn: "Madinah", regionAr: "منطقة المدينة المنورة", govs: [["Madinah", "المدينة المنورة"], ["Yanbu", "ينبع"]], typeNum: 2, color: "yellow", typeEn: "Watch", typeAr: "الإنذار الأصفر", statusId: 8, statusEn: "Raised dust", statusAr: "غبار مثار", cat: "dust", hazards: [["Reduced visibility", "تدني الرؤية"]], from: "2026-06-22 10:00:00", to: "2026-06-22 18:00:00", lastMod: "2026-06-22 08:20:00" },
+      81225: { id: "81225", title: "21062026-25", regionId: 11, regionEn: "Jazan", regionAr: "منطقة جازان", govs: [["Jazan", "جازان"], ["Sabya", "صبيا"]], typeNum: 3, color: "orange", typeEn: "Advanced Watch", typeAr: "الإنذار البرتقالي", statusId: 9, statusEn: "Thunderstorms", statusAr: "عواصف رعدية", cat: "storm", hazards: [["Heavy thundery rain", "أمطار رعدية غزيرة"]], from: "2026-06-22 15:00:00", to: "2026-06-22 23:00:00", lastMod: "2026-06-22 11:40:00" },
+      81240: { id: "81240", title: "21062026-40", regionId: 6, regionEn: "Jowf", regionAr: "منطقة الجوف", govs: [["Sakaka", "سكاكا"], ["Dumat Al-Jandal", "دومة الجندل"]], typeNum: 2, color: "yellow", typeEn: "Watch", typeAr: "الإنذار الأصفر", statusId: 15, statusEn: "Dusty winds", statusAr: "رياح مثيرة للأتربة", cat: "dust", hazards: [["Blowing dust", "غبار زاحف"]], from: "2026-06-22 16:00:00", to: "2026-06-22 22:00:00", lastMod: "2026-06-22 12:10:00" },
+    };
+    const clone = (o, p) => ({ ...o, ...p });
+    function mannedAlert(la) {
+      return { id: la.id, title: la.title, other_locations: { en: "", ar: "" },
+        alert_type: { id: la.typeNum, en: la.typeEn, ar: la.typeAr, color: la.color },
+        fromDate: la.from, toDate: la.to, lastModifiedDate: la.lastMod,
+        region: { id: la.regionId, en: la.regionEn, ar: la.regionAr },
+        alert_status: { id: la.statusId, en: la.statusEn, ar: la.statusAr },
+        alert_hazard: la.hazards.map((h, i) => ({ id: i + 1, name_en: h[0], name_ar: h[1] })),
+        governorates: la.govs.map((g, i) => ({ id: String(i + 1), name_en: g[0], name_ar: g[1], municipalities: [] })),
+        rawData: { alertStatusCategory: la.cat, alertType: String(la.typeNum), alertTypeEn: la.typeEn, lastModified: toUS(la.lastMod) } };
+    }
+    function geoAlert(la) {
+      return { id: Number(la.id), title: la.title, alertType: String(la.typeNum), alertTypeAr: la.typeAr, alertTypeEn: la.typeEn,
+        fromDate: toUS(la.from), toDate: toUS(la.to), alertStatusID: String(la.statusId), alertStatusAr: la.statusAr, alertStatusEn: la.statusEn, alertStatusCategory: la.cat,
+        alertHazards: la.hazards.map((h, i) => ({ id: String(i + 1), descriptionAr: h[1], descriptionEn: h[0] })),
+        regionID: la.regionId, regionAR: la.regionAr, regionEn: la.regionEn,
+        governorates: la.govs.map((g, i) => ({ id: String(i + 1), nameAr: g[1], nameEn: g[0], municipalities: [] })), lastModified: toUS(la.lastMod) };
+    }
+    function buildGeojson(list) {
+      const features = [];
+      list.forEach((la) => { const a = geoAlert(la); la.govs.forEach((g, i) => features.push({ type: "Feature", geometry: { type: "MultiPolygon", coordinates: [] }, properties: { Gov_Name_E: g[0], Region_Name_E: la.regionEn, alertType: String(la.typeNum), alert: [a] } })); });
+      return { type: "FeatureCollection", features };
+    }
+    const DEMO_MANNED = { success: true, data: [base[81200], base[81230], base[81210], base[81215], base[81220], base[81225]].map(mannedAlert) };
+    const DEMO_GEOJSON = buildGeojson([base[81200], base[81230], clone(base[81210], { to: "2026-06-22 22:00:00" }), clone(base[81215], { govs: [["Abha", "أبها"], ["Khamis Mushait", "خميس مشيط"]] }), clone(base[81220], { typeNum: 3, color: "orange", typeEn: "Advanced Watch", typeAr: "الإنذار البرتقالي" }), base[81240]]);
+
+    /* ===== UI ===== */
+    const sevChip = { red: "bg-red-500", orange: "bg-orange-500", yellow: "bg-amber-400", "": "bg-slate-300" };
+    const stateMeta = {
+      match: { label: "Match", cls: "text-emerald-700 bg-emerald-50 border-emerald-200", Icon: IcCheck },
+      mismatch: { label: "Mismatch", cls: "text-amber-700 bg-amber-50 border-amber-200", Icon: IcWarn },
+      missingA: { label: "Only in Early-Warning", cls: "text-rose-700 bg-rose-50 border-rose-200", Icon: IcX },
+      missingB: { label: "Only in Map (GeoJSON)", cls: "text-rose-700 bg-rose-50 border-rose-200", Icon: IcX },
+    };
+    const StatCard = ({ label, value, accent }) => (
+      <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 flex-1 min-w-[110px]">
+        <div className={`text-2xl font-semibold ${accent}`}>{value}</div>
+        <div className="text-xs text-slate-500 mt-0.5">{label}</div>
+      </div>
+    );
+    const ValueCell = ({ a, b, differ }) => (
+      <div className={`grid grid-cols-2 gap-2 px-3 py-2 rounded-lg ${differ ? "bg-amber-50" : ""}`}>
+        <div className={`text-sm break-words ${differ ? "text-amber-800 font-medium" : "text-slate-700"}`}>{a || <span className="text-slate-300">—</span>}</div>
+        <div className={`text-sm break-words ${differ ? "text-amber-800 font-medium" : "text-slate-700"}`}>{b || <span className="text-slate-300">—</span>}</div>
+      </div>
+    );
+    function AlertRow({ row, expanded, onToggle }) {
+      const meta = stateMeta[row.state]; const ref = row.a || row.b; const diffKeys = new Set(row.diffs.map((d) => d.key));
+      return (
+        <div className="border border-slate-200 rounded-xl bg-white overflow-hidden">
+          <button onClick={onToggle} className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 transition">
+            {expanded ? <IcDown c="w-4 h-4 text-slate-400 shrink-0" /> : <IcRight c="w-4 h-4 text-slate-400 shrink-0" />}
+            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${sevChip[ref.color]}`} />
+            <span className="font-mono text-xs text-slate-500 w-14 shrink-0">#{row.id}</span>
+            <span className="flex items-center gap-1 text-sm font-medium text-slate-800 w-28 shrink-0 truncate"><IcPin c="w-3.5 h-3.5 text-slate-400" /> {ref.region || "—"}</span>
+            <span className="text-sm text-slate-600 flex-1 truncate hidden sm:block">{ref.status}</span>
+            <span className="text-xs text-slate-400 hidden md:flex items-center gap-1 w-36 shrink-0"><IcClock c="w-3 h-3" /> {ref.fromDate?.slice(11)}–{ref.toDate?.slice(11)}</span>
+            <span className={`flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md border shrink-0 ${meta.cls}`}><meta.Icon c="w-3.5 h-3.5" /> {meta.label}{row.state === "mismatch" ? ` · ${row.diffs.length}` : ""}</span>
+          </button>
+          {expanded && (
+            <div className="border-t border-slate-100 bg-slate-50 px-4 py-3">
+              <div className="grid grid-cols-2 gap-2 px-3 pb-1 text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                <div className="flex items-center gap-1"><IcDb c="w-3 h-3" /> Map · GeoJSON</div>
+                <div className="flex items-center gap-1"><IcDb c="w-3 h-3" /> Early-Warning</div>
+              </div>
+              <div className="space-y-0.5">
+                {FIELDS.map((f) => {
+                  const differ = row.state === "mismatch" ? diffKeys.has(f.key) : row.state !== "match";
+                  return (
+                    <div key={f.key} className="flex items-start gap-2">
+                      <div className="w-24 shrink-0 text-xs text-slate-500 text-right pr-1 pt-2">{f.label}</div>
+                      <div className="flex-1"><ValueCell a={row.a ? f.get(row.a) : ""} b={row.b ? f.get(row.b) : ""} differ={differ} /></div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-2 pt-2 border-t border-slate-200 grid sm:grid-cols-3 gap-2 text-xs text-slate-500 px-3">
+                <div>Title · <span className="text-slate-700">{ref.title || "—"}</span></div>
+                <div>Category · <span className="text-slate-700">{ref.category || "—"}</span></div>
+                <div>Last modified · <span className="text-slate-700">{(row.a || {}).lastModified || (row.b || {}).lastModified || "—"}</span></div>
+                <div className="sm:col-span-3" dir="rtl">المنطقة · <span className="text-slate-700">{ref.regionAr}</span> — {ref.governoratesAr?.join("، ")}</div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+             }
+
+    const todayStr = (o = 0) => { const d = new Date(); d.setDate(d.getDate() + o); return d.toISOString().slice(0, 10); };
+    function App() {
+      const [rawA, setRawA] = useState(DEMO_GEOJSON);
+      const [rawB, setRawB] = useState(DEMO_MANNED);
+      const [mode, setMode] = useState("demo");
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState("");
+      const [lastRefreshed, setLastRefreshed] = useState(new Date());
+      const [filter, setFilter] = useState("all");
+      const [regionFilter, setRegionFilter] = useState("all");
+      const [query, setQuery] = useState("");
+      const [expanded, setExpanded] = useState(null);
+      const [showSettings, setShowSettings] = useState(false);
+      const [proxyBase, setProxyBase] = useState(CONFIG.defaultProxyBase);
+      const [autoRefresh, setAutoRefresh] = useState(false);
+      const [intervalMin, setIntervalMin] = useState(10);
+      const [fromDate, setFromDate] = useState(todayStr(0));
+      const [toDate, setToDate] = useState(todayStr(2));
+      const listA = useMemo(() => fromGeojson(rawA), [rawA]);
+      const listB = useMemo(() => fromManned(rawB), [rawB]);
+      const reconciled = useMemo(() => reconcile(listA, listB), [listA, listB]);
+      const summary = useMemo(() => { const s = { total: reconciled.length, match: 0, mismatch: 0, missing: 0 }; reconciled.forEach((r) => { if (r.state === "match") s.match++; else if (r.state === "mismatch") s.mismatch++; else s.missing++; }); return s; }, [reconciled]);
+      const regions = useMemo(() => ["all", ...new Set(reconciled.map((r) => (r.a || r.b).region).filter(Boolean))], [reconciled]);
+      const visible = useMemo(() => reconciled.filter((r) => {
+        if (filter === "issues" && r.state === "match") return false;
+        const ref = r.a || r.b;
+        if (regionFilter !== "all" && ref.region !== regionFilter) return false;
+        if (query && `${r.id} ${ref.region} ${ref.status} ${ref.governorates.join(" ")}`.toLowerCase().includes(query.toLowerCase())) return false;
+        return true;
+      }), [reconciled, filter, regionFilter, query]);
+      const loadData = useCallback(async () => {
+        setLoading(true); setError("");
+        try {
+          const gUrl = proxyBase ? `${proxyBase}/ncm-geojson` : CONFIG.geojsonUrl;
+          const mUrl = proxyBase ? `${proxyBase}/ncm-manned` : CONFIG.mannedUrl;
+          const gRes = await fetch(gUrl); if (!gRes.ok) throw new Error(`GeoJSON ${gRes.status}`);
+          const gJson = await gRes.json();
+          const mRes = await fetch(mUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from_date: fromDate, to_date: toDate, lang: "en" }) });
+          if (!mRes.ok) throw new Error(`manned-alerts ${mRes.status}`);
+          const mJson = await mRes.json();
+          setRawA(gJson); setRawB(mJson); setMode("live"); setLastRefreshed(new Date());
+        } catch (e) {
+          setError(`Live fetch unavailable (${e.message}). Showing sample data — this works once deployed with the proxy.`);
+          setRawA(DEMO_GEOJSON); setRawB(DEMO_MANNED); setMode("demo"); setLastRefreshed(new Date());
+        } finally { setLoading(false); }
+      }, [proxyBase, fromDate, toDate]);
+      useEffect(() => { loadData(); }, []);
+      useEffect(() => { if (!autoRefresh) return; const id = setInterval(loadData, intervalMin * 60000); return () => clearInterval(id); }, [autoRefresh, intervalMin, loadData]);
+      return (
+        <div className="max-w-5xl mx-auto text-slate-900">
+          <div className="rounded-2xl px-5 py-4 flex items-center gap-3 mb-4" style={{ backgroundColor: BRAND.navy }}>
+            <img src="https://www.centricdxb.com/assets/images/centric_logo_white_text.svg" alt="Centric" className="h-7 w-auto shrink-0" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+            <div className="w-px h-8 bg-white/15 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <h1 className="text-white font-semibold text-base sm:text-lg leading-tight">NCM Early-Warning Reconciliation</h1>
+              <p className="text-slate-400 text-xs hidden sm:block">Map GeoJSON feed vs Early-Warning alert list · field-by-field</p>
+            </div>
+            <div className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ${mode === "live" ? "bg-emerald-500/15 text-emerald-300" : "bg-amber-500/15 text-amber-300"}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${mode === "live" ? "bg-emerald-400" : "bg-amber-400"}`} />{mode === "live" ? "Live" : "Sample data"}
+            </div>
+            <button onClick={() => setShowSettings((s) => !s)} className="text-slate-400 hover:text-white transition p-1.5"><IcGear c="w-5 h-5" /></button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <button onClick={loadData} disabled={loading} style={{ backgroundColor: BRAND.teal }} className="flex items-center gap-2 hover:opacity-90 disabled:opacity-60 text-white text-sm font-medium px-4 py-2 rounded-lg transition">
+              <IcRefresh c={`w-4 h-4 ${loading ? "animate-spin" : ""}`} /> Compare now
+            </button>
+            <div className="flex items-center gap-2 text-xs text-slate-500"><IcClock c="w-3.5 h-3.5" /> Updated {lastRefreshed.toLocaleTimeString()}</div>
+            <div className="flex-1" />
+            <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} style={{ accentColor: BRAND.teal }} className="w-4 h-4" />Auto-refresh
+              <select value={intervalMin} onChange={(e) => setIntervalMin(Number(e.target.value))} disabled={!autoRefresh} className="border border-slate-300 rounded-md px-1.5 py-1 text-xs bg-white disabled:opacity-50">
+                <option value={5}>5 min</option><option value={10}>10 min</option><option value={15}>15 min</option><option value={30}>30 min</option>
+              </select>
+            </label>
+          </div>
+          {showSettings && (
+            <div className="bg-white border border-slate-200 rounded-xl p-4 mb-4 text-sm space-y-3">
+              <div className="flex items-center gap-2 text-slate-700 font-medium"><IcGear c="w-4 h-4" /> Data source</div>
+              <div><label className="text-xs text-slate-500 block mb-1">Proxy base (blank = attempt direct fetch)</label>
+                <input value={proxyBase} onChange={(e) => setProxyBase(e.target.value)} placeholder="/.netlify/functions" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono" /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs text-slate-500 block mb-1">From date</label><input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></div>
+                <div><label className="text-xs text-slate-500 block mb-1">To date</label><input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></div>
+              </div>
+              <p className="text-xs text-slate-400">Read-only requests · GeoJSON deduped by alert ID · date window applies to manned-alerts.</p>
+            </div>
+          )}
+          {error && <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3 mb-4 flex items-start gap-2"><IcWarn c="w-4 h-4 mt-0.5 shrink-0" /> {error}</div>}
+          <div className="flex flex-wrap gap-3 mb-4">
+            <StatCard label="Distinct alerts" value={summary.total} accent="text-slate-900" />
+            <StatCard label="Matching" value={summary.match} accent="text-emerald-600" />
+            <StatCard label="Field mismatches" value={summary.mismatch} accent="text-amber-600" />
+            <StatCard label="Missing on one side" value={summary.missing} accent="text-rose-600" />
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <div className="flex bg-white border border-slate-200 rounded-lg p-0.5">
+              <button onClick={() => setFilter("all")} className="text-xs px-3 py-1.5 rounded-md font-medium" style={filter === "all" ? { backgroundColor: BRAND.navy, color: "#fff" } : { color: "#475569" }}>All</button>
+              <button onClick={() => setFilter("issues")} className="text-xs px-3 py-1.5 rounded-md font-medium" style={filter === "issues" ? { backgroundColor: BRAND.navy, color: "#fff" } : { color: "#475569" }}>Discrepancies only</button>
+            </div>
+            <select value={regionFilter} onChange={(e) => setRegionFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-2.5 py-2 bg-white">
+              {regions.map((r) => <option key={r} value={r}>{r === "all" ? "All regions" : r}</option>)}
+            </select>
+            <div className="relative flex-1 min-w-[160px]">
+              <span className="absolute left-2.5 top-2.5 text-slate-400"><IcSearch c="w-3.5 h-3.5" /></span>
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search id, region, status, governorate…" className="w-full border border-slate-200 rounded-lg pl-8 pr-3 py-2 text-xs bg-white" />
+            </div>
+          </div>
+          <div className="space-y-2">
+            {visible.length === 0 && <div className="text-center text-sm text-slate-400 py-10 bg-white rounded-xl border border-slate-200">No alerts match this filter.</div>}
+            {visible.map((row) => <AlertRow key={row.id} row={row} expanded={expanded === row.id} onToggle={() => setExpanded(expanded === row.id ? null : row.id)} />)}
+          </div>
+          <div className="mt-5 space-y-3">
+            <div className="flex items-center gap-2 text-xs text-slate-400"><IcShield c="w-3.5 h-3.5" /> Polite by design — manual refresh, read-only requests, optional slow auto-refresh. Reconciled by alert ID, then compared field by field.</div>
+            <div className="flex items-center justify-center gap-2 pt-3 border-t border-slate-200">
+              <span className="text-xs text-slate-400">Delivered by</span>
+              <img src="https://www.centricdxb.com/assets/images/centric_logo_color_text.svg" alt="Centric" className="h-5 w-auto" onError={(e) => { e.currentTarget.style.display = "none"; }} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
