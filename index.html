@@ -57,61 +57,103 @@
       return str;
     }
     const sortJoin = (a, sep = ", ") => [...a].filter(Boolean).sort((x, y) => x.localeCompare(y)).join(sep);
-    /* ===== fromNcmWeb: extract embedded ewsCalendarConfig JSON from ncm.gov.sa HTML ===== */
+    /* ===== fromNcmWeb: parse ncm.gov.sa POST JSON response (accordion HTML) ===== */
     function fromNcmWeb(html) {
       if (!html) return [];
-      // Primary: extract the structured ewsCalendarConfig JSON embedded in the ncm.gov.sa page
-      try {
-        const cfgM = html.match(/ewsCalendarConfig\s*=\s*(\{[\s\S]*?"alerts"\s*:\s*\[[\s\S]*?\]\s*\})/);
-        if (cfgM) {
-          const cfg = JSON.parse(cfgM[1]);
-          const alerts = cfg.alerts || [];
-          if (alerts.length > 0) {
-            return alerts.map((a) => ({
-              id: String(a.id),
-              region: a.regionName || "",
-              color: (a.alertTypeColor || "").toLowerCase(),
-              level: a.alertTypeId === "3" ? "Advanced Watch" : a.alertTypeId === "2" ? "Watch" : a.alertTypeId === "1" ? "Critical Watch" : "",
-              status: a.alertStatus || "",
-              hazards: (a.hazards || "").split(",").map((h) => h.trim()).filter(Boolean),
-              startDate: (a.fromDate || "").substring(0, 10),
-              endDate: (a.toDate || "").substring(0, 10),
-              governorates: a.governorates || [],
-            }));
-          }
-        }
-      } catch (e) { /* fall through to link-based parsing */ }
 
-      // Fallback: parse HTML early-warning links
+      // Strategy 1: parse JSON response from ncm.gov.sa POST API (preferred)
+      // The proxy should POST to /en/early-warning with X-Requested-With: XMLHttpRequest
+      // which returns { html, paginationHtml, alertCounts }
+      try {
+        const json = JSON.parse(html);
+        if (json && json.html) {
+          return parseNcmAccordionHtml(json.html);
+        }
+      } catch (e) { /* not JSON, try plain HTML */ }
+
+      // Strategy 2: parse raw HTML accordion (fallback)
+      return parseNcmAccordionHtml(html);
+    }
+
+    function parseNcmAccordionHtml(html) {
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, "text/html");
-      const links = doc.querySelectorAll('a[href*="/en/early-warning/"]');
       const alerts = [];
-      for (const link of links) {
-        const m = link.href.match(/\/early-warning\/(\d+)/);
-        if (!m) continue;
-        const id = m[1];
-        let el = link; let cardEl = null;
-        for (let i = 0; i < 10; i++) {
-          el = el && el.parentElement;
-          if (!el) break;
-          if (el.querySelectorAll('a[href*="/early-warning/"]').length === 1) cardEl = el;
-        }
-        const text = cardEl ? cardEl.textContent.trim().replace(/\s+/g, " ") : "";
-        const colorM = text.match(/\b(Orange|Yellow|Red)\s+Alert\b/i);
-        const color = colorM ? colorM[1].toLowerCase() : "";
+
+      doc.querySelectorAll(".accordion-item[class*=ews-manned]").forEach((item) => {
+        const h2 = item.querySelector("h2[id*=ews-alert-heading]");
+        if (!h2) return;
+        const id = h2.id.replace("ews-alert-heading-", "");
+
+        // Color from class: ews-manned-alert-item--yellow / --orange / --red
+        const colorCls = [...item.classList].find((c) => c.startsWith("ews-manned-alert-item--"));
+        const color = colorCls ? colorCls.replace("ews-manned-alert-item--", "") : "";
         const level = color === "orange" ? "Advanced Watch" : color === "yellow" ? "Watch" : color === "red" ? "Critical Watch" : "";
-        const regionM = text.match(/^([\w\s]+?)\s+Region\s+(Orange|Yellow|Red)\s+Alert/i);
+
+        // Parse h2 text: "Status | AlertAction - ( Region ) | Start: ... End: ... | Govs"
+        const headerText = h2.textContent.replace(/\s+/g, " ").trim();
+        const parts = headerText.split("|").map((p) => p.trim());
+        const status = parts[0] || "";
+        const actionRegion = parts[1] || "";
+        const regionM = actionRegion.match(/\(\s*([^)]+)\s*\)/);
         const region = regionM ? regionM[1].trim() : "";
-        const statusM = text.match(/(Orange|Yellow|Red)\s+Alert\s+([\w\s]+?)\s+Modified Date/i);
-        const status = statusM ? statusM[2].trim() : "";
-        const dates = text.match(/(\d{2}\/\d{2}\/\d{4})/g) || [];
+
+        // Start/end dates from header text
+        const dateM = headerText.match(/(\d{2}\/\d{2}\/\d{4})/g) || [];
         const toDash = (d) => d ? d.replace(/(\d{2})\/(\d{2})\/(\d{4})/, "$3-$2-$1") : "";
-        const afterLast = dates[2] ? text.split(dates[2]).pop() || "" : "";
-        const govRaw = afterLast.replace(/\+\d+\s*more/gi, " ").replace(/[^A-Za-z\s]/g, " ").trim();
-        const govs = govRaw.split(/\s{2,}/).map(g => g.trim()).filter(g => g.length > 2 && !/^\d+$/.test(g));
-        alerts.push({ id, region, color, level, status, startDate: toDash(dates[1]), endDate: toDash(dates[2]), governorates: govs });
+        const startDate = toDash(dateM[0]);
+        const endDate = toDash(dateM[1]);
+
+        // Governorates from the expanded detail section
+        const govContainer = item.querySelector("[class*=gov], .ews-governorates, .ews-alert-governorates");
+        const govEls = govContainer
+          ? [...govContainer.querySelectorAll("span, li, div")]
+          : [...item.querySelectorAll(".badge, [class*=governorate-tag], [class*=gov-tag]")];
+        const governorates = govEls.length
+          ? govEls.map((el) => el.textContent.trim()).filter(Boolean)
+          : (parts[3] || "").split(",").map((g) => g.trim()).filter((g) => g.length > 1);
+
+        // Hazards if present
+        const hazardEls = [...item.querySelectorAll("[class*=hazard], [class*=alert-hazard]")];
+        const hazards = hazardEls.map((el) => el.textContent.trim()).filter(Boolean);
+
+        // Alert ID from table or data attribute
+        const alertIdEl = item.querySelector("[class*=alert-id], td[data-label=\"Alert ID\"]");
+        const alertId = alertIdEl ? alertIdEl.textContent.trim() : id;
+
+        alerts.push({ id: alertId || id, region, color, level, status, startDate, endDate, governorates, hazards });
+      });
+
+      // Fallback: link-based parsing for old-style HTML
+      if (alerts.length === 0) {
+        const links = doc.querySelectorAll('a[href*="/en/early-warning/"]');
+        for (const link of links) {
+          const m = link.href.match(/\/early-warning\/(\d+)/);
+          if (!m) continue;
+          const id = m[1];
+          let el = link; let cardEl = null;
+          for (let i = 0; i < 10; i++) {
+            el = el && el.parentElement;
+            if (!el) break;
+            if (el.querySelectorAll('a[href*="/early-warning/"]').length === 1) cardEl = el;
+          }
+          const text = cardEl ? cardEl.textContent.trim().replace(/\s+/g, " ") : "";
+          const colorM = text.match(/\b(Orange|Yellow|Red)\s+Alert\b/i);
+          const color = colorM ? colorM[1].toLowerCase() : "";
+          const level = color === "orange" ? "Advanced Watch" : color === "yellow" ? "Watch" : color === "red" ? "Critical Watch" : "";
+          const regionM = text.match(/^([\w\s]+?)\s+Region\s+(Orange|Yellow|Red)\s+Alert/i);
+          const region = regionM ? regionM[1].trim() : "";
+          const statusM = text.match(/(Orange|Yellow|Red)\s+Alert\s+([\w\s]+?)\s+Modified Date/i);
+          const status = statusM ? statusM[2].trim() : "";
+          const dates = text.match(/(\d{2}\/\d{2}\/\d{4})/g) || [];
+          const toDash = (d) => d ? d.replace(/(\d{2})\/(\d{2})\/(\d{4})/, "$3-$2-$1") : "";
+          const afterLast = dates[2] ? text.split(dates[2]).pop() || "" : "";
+          const govRaw = afterLast.replace(/\+\d+\s*more/gi, " ").replace(/[^A-Za-z\s]/g, " ").trim();
+          const govs = govRaw.split(/\s{2,}/).map(g => g.trim()).filter(g => g.length > 2 && !/^\d+$/.test(g));
+          alerts.push({ id, region, color, level, status, startDate: toDash(dates[1]), endDate: toDash(dates[2]), governorates: govs });
+        }
       }
+
       return alerts;
     }
     function fromGeojson(fc) {
@@ -305,7 +347,7 @@
         try {
           const [gRes, wRes] = await Promise.all([
             fetch(CONFIG.geojsonUrl),
-            fetch(CONFIG.ncmWebUrl),
+            fetch(CONFIG.ncmWebUrl, { method: "POST", headers: { "X-Requested-With": "XMLHttpRequest", "Content-Type": "application/x-www-form-urlencoded" }, body: "page=all" }),
           ]);
           if (!gRes.ok) throw new Error("GeoJSON " + gRes.status);
           if (!wRes.ok) throw new Error("NCM website " + wRes.status);
