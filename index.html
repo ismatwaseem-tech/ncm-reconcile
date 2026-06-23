@@ -342,23 +342,30 @@
         if (query && !(r.id + " " + ref.region + " " + ref.status + " " + ref.governorates.join(" ")).toLowerCase().includes(query.toLowerCase())) return false;
         return true;
       }), [reconciled, filter, regionFilter, query]);
-      const loadData = useCallback(async () => {
-        setLoading(true); setError("");
-        try {
-          const [gRes, wRes] = await Promise.all([
-            fetch(CONFIG.geojsonUrl),
-            fetch(CONFIG.ncmWebUrl, { method: "POST", headers: { "X-Requested-With": "XMLHttpRequest", "Content-Type": "application/x-www-form-urlencoded" }, body: "page=all" }),
-          ]);
-          if (!gRes.ok) throw new Error("GeoJSON " + gRes.status);
-          if (!wRes.ok) throw new Error("NCM website " + wRes.status);
-          const gJson = await gRes.json();
-          const wHtml = await wRes.text();
-          setRawA(gJson); setRawB(wHtml); setMode("live"); setLastRefreshed(new Date());
-        } catch (e) {
-          setError("Live fetch unavailable (" + e.message + "). Showing sample data.");
-          setRawA(DEMO_GEOJSON); setRawB(DEMO_MANNED); setMode("demo"); setLastRefreshed(new Date());
-        } finally { setLoading(false); }
-      }, []);
+  const loadData = useCallback(async () => {
+    setLoading(true); setError("");
+    try {
+      // Try direct fetch first (works when CORS is allowed)
+      const ncmPostOpts = { method: "POST", headers: { "X-Requested-With": "XMLHttpRequest", "Content-Type": "application/x-www-form-urlencoded" }, body: "page=all" };
+      const [oRes, wRes] = await Promise.all([
+        fetch(CONFIG.geojsonUrl),
+        fetch(CONFIG.ncmWebUrl, ncmPostOpts),
+      ]);
+      const [oJson, wJson] = await Promise.all([oRes.json(), wRes.json()]);
+      setRawA(oJson); setRawB(JSON.stringify(wJson)); setMode("live"); setLastRefreshed(new Date());
+    } catch (e) {
+      try {
+        // Fallback: use Netlify proxy functions
+        const [oRes, wRes] = await Promise.all([
+          fetch(`${proxyBase}/ncm-geojson`),
+          fetch(`${proxyBase}/ncm-manned?page=all`),
+        ]);
+        const [oJson, wJson] = await Promise.all([oRes.json(), wRes.json()]);
+        setRawA(oJson); setRawB(JSON.stringify(wJson)); setMode("live"); setLastRefreshed(new Date());
+      } catch (e2) { setError(e2.message); }
+    }
+    setLoading(false);
+  }, [proxyBase]);
       useEffect(() => { loadData(); }, []);
       useEffect(() => { if (!autoRefresh) return; const id = setInterval(loadData, intervalMin * 60000); return () => clearInterval(id); }, [autoRefresh, intervalMin, loadData]);
       return (
