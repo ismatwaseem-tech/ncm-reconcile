@@ -57,7 +57,32 @@
       return str;
     }
     const sortJoin = (a, sep = ", ") => [...a].filter(Boolean).sort((x, y) => x.localeCompare(y)).join(sep);
+    /* ===== fromNcmWeb: extract embedded ewsCalendarConfig JSON from ncm.gov.sa HTML ===== */
     function fromNcmWeb(html) {
+      if (!html) return [];
+      // Primary: extract the structured ewsCalendarConfig JSON embedded in the ncm.gov.sa page
+      try {
+        const cfgM = html.match(/ewsCalendarConfig\s*=\s*(\{[\s\S]*?"alerts"\s*:\s*\[[\s\S]*?\]\s*\})/);
+        if (cfgM) {
+          const cfg = JSON.parse(cfgM[1]);
+          const alerts = cfg.alerts || [];
+          if (alerts.length > 0) {
+            return alerts.map((a) => ({
+              id: String(a.id),
+              region: a.regionName || "",
+              color: (a.alertTypeColor || "").toLowerCase(),
+              level: a.alertTypeId === "3" ? "Advanced Watch" : a.alertTypeId === "2" ? "Watch" : a.alertTypeId === "1" ? "Critical Watch" : "",
+              status: a.alertStatus || "",
+              hazards: (a.hazards || "").split(",").map((h) => h.trim()).filter(Boolean),
+              startDate: (a.fromDate || "").substring(0, 10),
+              endDate: (a.toDate || "").substring(0, 10),
+              governorates: a.governorates || [],
+            }));
+          }
+        }
+      } catch (e) { /* fall through to link-based parsing */ }
+
+      // Fallback: parse HTML early-warning links
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, "text/html");
       const links = doc.querySelectorAll('a[href*="/en/early-warning/"]');
